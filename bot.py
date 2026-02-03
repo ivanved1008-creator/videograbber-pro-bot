@@ -1,170 +1,124 @@
-import os
-import re
 import asyncio
 import logging
-from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command
-from aiogram.enums import ParseMode
-import yt_dlp
+from telethon import TelegramClient, events
 
 # ==================== НАСТРОЙКИ ====================
-# ЗАМЕНИТЕ ЭТИ ЗНАЧЕНИЯ НА СВОИ:
-BOT_TOKEN = '8550747360:AAF0nhq9CMRhVgplUSeP7JWCbCNqo3NkNXs'  # Ваш токен от @BotFather
-API_ID = 36849897  # Ваш api_id с my.telegram.org
-API_HASH = '3b1f361c18993639ae7eab250eb51ab8'  # Ваш api_hash
-YOUR_HOSTING_USERNAME = 'user123'  # Замените на ваш логин на Bothost или любое слово
+# ВАШИ ДАННЫЕ (замените на свои)
+API_ID = 36849897
+API_HASH = '3b1f361c18993639ae7eab250eb51ab8'
+BOT_TOKEN = '8550747360:AAF0nhq9CMRhVgplUSeP7JWCbCNqo3NkNXs'  # Токен ВАШЕГО бота @videograbber_pro_bot
 
-# Список поддерживаемых платформ
-SUPPORTED_DOMAINS = ['youtube.com', 'youtu.be', 'tiktok.com']
+# БОТ-ЗАГРУЗЧИК (можно менять, см. список ниже)
+DOWNLOADER_BOT = '@GozillaDownloader'  # Основной бот для скачивания
+
+# Имя для файлов сессии (можно любое, например, ваш логин на хостинге)
+SESSION_NAME = 'ivan2'
+# ==================================================
 
 # Настройка логирования
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ==================== КЛАСС ДЛЯ СКАЧИВАНИЯ ВИДЕО ====================
-class VideoDownloader:
-    def __init__(self):
-        self.ydl_opts = {
-            'format': 'best[height<=1080]',
-            'outtmpl': 'downloads/%(title).100s.%(ext)s',
-            'quiet': True,
-            'no_warnings': True,
-            'extract_flat': False,
-            'socket_timeout': 30,
-            'retries': 3,
-            'continuedl': True,
-            'noprogress': True,
-            'max_filesize': 10_000_000_000,
-            'merge_output_format': 'mp4',
-            'extractor_args': {
-                'tiktok': {'format': 'download_addr'}
-            }
-        }
-        os.makedirs('downloads', exist_ok=True)
+# Инициализация клиентов Telethon
+# user_client - ваш личный аккаунт для общения с загрузчиком
+user_client = TelegramClient(f'{SESSION_NAME}_user.session', API_ID, API_HASH)
+# bot_client - ваш бот для приема команд от людей
+bot_client = TelegramClient(f'{SESSION_NAME}_bot.session', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 
-    async def get_video_info(self, url: str):
-        try:
-            with yt_dlp.YoutubeDL(self.ydl_opts) as ydl:
-                loop = asyncio.get_event_loop()
-                info = await loop.run_in_executor(None, lambda: ydl.extract_info(url, download=False))
-                return {
-                    'title': info.get('title', 'Без названия'),
-                    'duration': info.get('duration', 0),
-                    'uploader': info.get('uploader', 'Неизвестно'),
-                    'webpage_url': info.get('webpage_url', url)
-                }
-        except Exception as e:
-            logger.error(f"Ошибка получения информации: {e}")
-            return None
+logger.info("🤖 Бот-посредник запускается...")
 
-    async def download_video(self, url: str, chat_id: int):
-        output_template = f'downloads/%(title).50s_{chat_id}.%(ext)s'
-        opts = self.ydl_opts.copy()
-        opts['outtmpl'] = output_template
-        try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                loop = asyncio.get_event_loop()
-                await loop.run_in_executor(None, lambda: ydl.download([url]))
-                return output_template.replace('%(title).50s', 'video').replace('%(ext)s', 'mp4')
-        except Exception as e:
-            logger.error(f"Ошибка скачивания: {e}")
-            return None
-
-# ==================== ИНИЦИАЛИЗАЦИЯ БОТА ====================
-bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML)
-dp = Dispatcher()
-downloader = VideoDownloader()
-
-# ==================== КОМАНДЫ БОТА ====================
-@dp.message(Command("start"))
-async def cmd_start(message: types.Message):
-    await message.answer(
-        "🚀 <b>Добро пожаловать в YouTube & TikTok Downloader!</b>\n\n"
-        "Просто отправь мне ссылку на видео, и я скачаю его в качестве до 1080p.\n\n"
-        "✅ <b>Поддерживаются:</b>\n"
-        "• YouTube\n"
-        "• TikTok (без водяного знака)\n\n"
-        "⚡ <b>Бот оптимизирован для скорости!</b>",
-        parse_mode='markdown'
+# ==================== ОБРАБОТКА КОМАНД ====================
+@bot_client.on(events.NewMessage(pattern='/start'))
+async def start_handler(event):
+    """Отвечает на команду /start"""
+    await event.reply(
+        "🚀 Привет! Я бот для скачивания видео.\n"
+        f"Просто отправь мне ссылку на видео с YouTube или TikTok, и я передам её загрузчику {DOWNLOADER_BOT}."
     )
 
-@dp.message(Command("help"))
-async def cmd_help(message: types.Message):
-    await message.answer(
-        "📖 <b>Справка</b>\n\n"
-        "• Отправьте прямую ссылку на видео\n"
-        "• Бот автоматически определит источник и начнет обработку\n"
-        "• Выберите качество (если доступно)\n"
-        "• Получите готовое видео\n\n"
-        "<i>Скачивание может занять от нескольких секунд до пары минут.</i>"
+@bot_client.on(events.NewMessage(pattern='/help'))
+async def help_handler(event):
+    """Отвечает на команду /help"""
+    await event.reply(
+        "📖 **Как пользоваться:**\n"
+        "1. Скопируй ссылку на видео (YouTube, TikTok и др.)\n"
+        "2. Отправь ссылку мне\n"
+        "3. Я автоматически передам её мощному загрузчику\n"
+        "4. Как только он пришлёт видео, я сразу перешлю его тебе!\n\n"
+        "⏳ Обычно это занимает от 15 до 60 секунд."
     )
 
-# ==================== ОБРАБОТКА ССЫЛОК ====================
-@dp.message(F.text)
-async def handle_link(message: types.Message):
-    # Ищем ссылку в тексте сообщения
-    msg_text = message.text
-    urls_found = []
-    
-    # Используем регулярное выражение для поиска ссылок
-    url_pattern = re.compile(r'https?://\S+')
-    urls_found = url_pattern.findall(msg_text)
-    
-    if not urls_found:
-        await message.answer("❌ Не могу найти ссылку в вашем сообщении. Отправьте прямую ссылку.")
-        return
-    
-    url = urls_found[0].strip().rstrip('.,;!?')
-    
-    # Проверяем, что это ссылка на поддерживаемую платформу
-    if not any(domain in url for domain in SUPPORTED_DOMAINS):
-        await message.answer("⚠️ Это не ссылка на поддерживаемую платформу (YouTube, TikTok).")
-        return
-    
-    # Отправляем сообщение о начале обработки
-    status_msg = await message.answer("🔍 <i>Анализирую ссылку...</i>")
-    
+# ==================== ОСНОВНАЯ ЛОГИКА: ОБРАБОТКА ССЫЛОК ====================
+@bot_client.on(events.NewMessage())
+async def link_handler(event):
+    """Принимает ссылку от пользователя, работает с загрузчиком."""
+    user_msg = event.message.message
+    user = await event.get_sender()
+
+    # Простая проверка, что это похоже на ссылку YouTube/TikTok
+    if not ('youtu' in user_msg or 'tiktok' in user_msg):
+        return  # Игнорируем, если это не ссылка
+
+    logger.info(f"📥 Получена ссылка от @{user.username}: {user_msg}")
+    status_msg = await event.reply(f'🔄 Передаю ссылку загрузчику {DOWNLOADER_BOT}...')
+
     try:
-        # Получаем информацию о видео
-        video_info = await downloader.get_video_info(url)
-        if not video_info:
-            await status_msg.edit_text("❌ Не удалось получить информацию о видео. Проверьте ссылку.")
-            return
-        
-        # Обновляем статус
-        await status_msg.edit_text(
-            f"🎬 <b>{video_info['title'][:50]}...</b>\n"
-            f"👤 Автор: {video_info['uploader']}\n"
-            f"⏱ Длительность: {video_info['duration']} сек.\n\n"
-            f"<i>Начинаю загрузку...</i>"
-        )
-        
-        # Скачиваем видео
-        file_path = await downloader.download_video(url, message.chat.id)
-        
-        if file_path and os.path.exists(file_path):
-            # Отправляем видео
-            with open(file_path, 'rb') as video_file:
-                await message.answer("✅ <b>Видео готово!</b>")
-                await bot.send_video(
-                    message.chat.id,
-                    video_file,
-                    caption=f"🎥 {video_info['title'][:50]}... (via @videograbber_pro_bot)"
-                )
-            # Удаляем временный файл
-            os.remove(file_path)
-            await status_msg.delete()
-        else:
-            await status_msg.edit_text("❌ Не удалось скачать видео. Попробуйте другую ссылку.")
+        # ШАГ 1: Ваш личный аккаунт отправляет ссылку боту-загрузчику
+        async with user_client:
+            # Отправляем ссылку
+            sent_message = await user_client.send_message(DOWNLOADER_BOT, user_msg)
+            logger.info(f"📤 Ссылка отправлена загрузчику. ID нашего сообщения: {sent_message.id}")
             
+            # Даем время боту-загрузчику обработать ссылку (можно увеличить для больших видео)
+            await asyncio.sleep(35)
+            logger.info("⏳ Поиск ответа от загрузчика...")
+
+            # ШАГ 2: Ищем в чате с загрузчиком ответ (последние 10 сообщений)
+            messages = await user_client.get_messages(DOWNLOADER_BOT, limit=10)
+            logger.info(f"📨 Проверяем последние {len(messages)} сообщений от загрузчика.")
+
+            for msg in messages:
+                # Ищем видео или документ, который пришел ПОСЛЕ нашего запроса
+                if msg.id > sent_message.id and (msg.video or (msg.document and 'video' in str(msg.document.mime_type))):
+                    logger.info(f"✅ Найдено видео для пересылки: {msg.file.name if msg.file else 'видео-файл'}")
+
+                    # ШАГ 3: Нашли видео! Пересылаем его пользователю.
+                    await status_msg.edit_text('✅ Видео готово! Отправляю...')
+                    await user_client.forward_messages(user.id, msg)
+                    logger.info(f"📭 Видео переслано пользователю {user.id}.")
+                    return  # Успешное завершение
+
+            # Если дошли сюда, значит, подходящий файл не нашелся
+            logger.warning("❌ Загрузчик не вернул видеофайл в отведенное время.")
+            await status_msg.edit_text(
+                '❌ Не удалось получить видео от загрузчика.\n'
+                'Возможные причины:\n'
+                '• Загрузчик перегружен\n'
+                '• Ссылка нерабочая или приватная\n'
+                '• Загрузчик изменил логику работы\n'
+                'Попробуйте другую ссылку или повторите позже.'
+            )
+
     except Exception as e:
-        logger.error(f"Ошибка при скачивании {url}: {e}")
-        await status_msg.edit_text(f"⚠️ Произошла ошибка при обработке: {str(e)[:200]}...")
+        # Ловим любые ошибки в процессе
+        logger.error(f"💥 Критическая ошибка в работе с загрузчиком: {e}", exc_info=True)
+        await status_msg.edit_text(f'⚠️ Произошла техническая ошибка: {str(e)[:150]}')
 
 # ==================== ЗАПУСК БОТА ====================
 async def main():
-    logger.info("Бот запускается...")
-    await dp.start_polling(bot)
+    """Главная функция для запуска всех клиентов."""
+    # Авторизуем ваш личный аккаунт (при первом запуске запросит номер и код)
+    await user_client.start()
+    logger.info("✅ Личный аккаунт авторизован.")
+    # Запускаем вашего бота
+    await bot_client.start()
+    me = await bot_client.get_me()
+    logger.info(f"🎉 Бот-посредник @{me.username} запущен и слушает сообщения!")
+    # Бот работает до принудительной остановки
+    await bot_client.run_until_disconnected()
 
-if __name__ == "__main__":
-    asyncio.run(main())
+if __name__ == '__main__':
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Бот остановлен.")
