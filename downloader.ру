@@ -5,20 +5,16 @@ from typing import Optional, Dict
 class VideoDownloader:
     def __init__(self):
         self.ydl_opts = {
-            'format': 'best[height<=1080]',  # Лучшее качество до 1080p
+            'format': 'best[height<=1080]',
             'quiet': True,
             'no_warnings': True,
             'extract_flat': False,
-            # Специальные настройки для TikTok (если доступно без watermark)
             'extractor_args': {
-                'tiktok': {
-                    'format': 'download_addr'
-                }
+                'tiktok': {'format': 'download_addr'}
             }
         }
 
     async def get_video_info(self, url: str) -> Optional[Dict]:
-        """Получает информацию о видео (название, длительность) без скачивания."""
         try:
             with yt_dlp.YoutubeDL(self.ydl_opts) as ydl:
                 loop = asyncio.get_event_loop()
@@ -34,17 +30,13 @@ class VideoDownloader:
             return None
 
     async def download_video(self, url: str, chat_id: int) -> Optional[str]:
-        """Скачивает видео и возвращает путь к файлу."""
-        # Уникальное имя файла для каждого пользователя
         output_template = f'downloads/%(title).50s_{chat_id}.%(ext)s'
         opts = self.ydl_opts.copy()
         opts['outtmpl'] = output_template
-
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 loop = asyncio.get_event_loop()
                 await loop.run_in_executor(None, lambda: ydl.download([url]))
-                # yt-dlp сам формирует итоговое имя. Для простоты возвращаем шаблон.
                 return output_template.replace('%(title).50s', 'видео').replace('%(ext)s', 'mp4')
         except Exception as e:
             print(f"Ошибка скачивания: {e}")
