@@ -1,150 +1,168 @@
+import os
+import re
 import asyncio
 import logging
-import os
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.enums import ParseMode
+import yt_dlp
 
-# Импортируем наши модули
-import config
-from downloader import VideoDownloader
+# ==================== НАСТРОЙКИ ====================
+# ЗАМЕНИТЕ ЭТИ ЗНАЧЕНИЯ НА СВОИ:
+BOT_TOKEN = '8550747360:AAF0nhq9CMRhVgplUSeP7JWCbCNqo3NkNXs'  # Ваш токен от @BotFather
+API_ID = 36849897  # Ваш api_id с my.telegram.org
+API_HASH = '3b1f361c18993639ae7eab250eb51ab8'  # Ваш api_hash
+YOUR_HOSTING_USERNAME = 'user123'  # Замените на ваш логин на Bothost или любое слово
+
+# Список поддерживаемых платформ
+SUPPORTED_DOMAINS = ['youtube.com', 'youtu.be', 'tiktok.com']
 
 # Настройка логирования
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Инициализация
-bot = Bot(token=config.BOT_TOKEN, parse_mode=ParseMode.HTML)
+# ==================== КЛАСС ДЛЯ СКАЧИВАНИЯ ВИДЕО ====================
+class VideoDownloader:
+    def __init__(self):
+        self.ydl_opts = {
+            'format': 'best[height<=1080]',
+            'outtmpl': 'downloads/%(title).100s.%(ext)s',
+            'quiet': True,
+            'no_warnings': True,
+            'extract_flat': False,
+            'socket_timeout': 30,
+            'retries': 3,
+            'continuedl': True,
+            'noprogress': True,
+            'max_filesize': 10_000_000_000,
+            'merge_output_format': 'mp4',
+            'extractor_args': {
+                'tiktok': {'format': 'download_addr'}
+            }
+        }
+        os.makedirs('downloads', exist_ok=True)
+
+    async def get_video_info(self, url: str):
+        try:
+            with yt_dlp.YoutubeDL(self.ydl_opts) as ydl:
+                loop = asyncio.get_event_loop()
+                info = await loop.run_in_executor(None, lambda: ydl.extract_info(url, download=False))
+                return {
+                    'title': info.get('title', 'Без названия'),
+                    'duration': info.get('duration', 0),
+                    'uploader': info.get('uploader', 'Неизвестно'),
+                    'webpage_url': info.get('webpage_url', url)
+                }
+        except Exception as e:
+            logger.error(f"Ошибка получения информации: {e}")
+            return None
+
+    async def download_video(self, url: str, chat_id: int):
+        output_template = f'downloads/%(title).50s_{chat_id}.%(ext)s'
+        opts = self.ydl_opts.copy()
+        opts['outtmpl'] = output_template
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, lambda: ydl.download([url]))
+                return output_template.replace('%(title).50s', 'video').replace('%(ext)s', 'mp4')
+        except Exception as e:
+            logger.error(f"Ошибка скачивания: {e}")
+            return None
+
+# ==================== ИНИЦИАЛИЗАЦИЯ БОТА ====================
+bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML)
 dp = Dispatcher()
 downloader = VideoDownloader()
 
-# Создаем папку для загрузок
-os.makedirs('downloads', exist_ok=True)
-
-# ========== КЛАВИАТУРЫ (ваше "оформление") ==========
-def main_menu_keyboard():
-    """Главное меню после команды /start"""
-    keyboard = [
-        [InlineKeyboardButton(text="🎬 Скачать видео", callback_data="download")],
-        [InlineKeyboardButton(text="❓ Помощь", callback_data="help"),
-         InlineKeyboardButton(text="📊 Статус", callback_data="status")]
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=keyboard)
-
-def quality_keyboard():
-    """Клавиатура выбора качества (пример)"""
-    keyboard = [
-        [InlineKeyboardButton(text="📱 720p (Стандарт)", callback_data="quality_720")],
-        [InlineKeyboardButton(text="💻 1080p (HD)", callback_data="quality_1080")],
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data="back")]
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=keyboard)
-
-# ========== ОБРАБОТЧИКИ КОМАНД ==========
+# ==================== КОМАНДЫ БОТА ====================
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    """Обработчик команды /start с приветственным сообщением"""
-    welcome_text = (
+    await message.answer(
         "🚀 <b>Добро пожаловать в YouTube & TikTok Downloader!</b>\n\n"
-        "Я помогу скачать видео с популярных платформ быстро и без водяных знаков.\n\n"
-        "✏️ <b>Как пользоваться:</b>\n"
-        "1. Просто отправьте мне ссылку на видео\n"
-        "2. Я проверю её и предложу варианты\n"
-        "3. Выберите качество и получите файл!\n\n"
-        "✅ <b>Поддерживаются:</b> YouTube, TikTok, Instagram, VK"
+        "Просто отправь мне ссылку на видео, и я скачаю его в качестве до 1080p.\n\n"
+        "✅ <b>Поддерживаются:</b>\n"
+        "• YouTube\n"
+        "• TikTok (без водяного знака)\n\n"
+        "⚡ <b>Бот оптимизирован для скорости!</b>",
+        parse_mode='markdown'
     )
-    await message.answer(welcome_text, reply_markup=main_menu_keyboard())
 
 @dp.message(Command("help"))
 async def cmd_help(message: types.Message):
-    """Обработчик команды /help"""
-    help_text = (
+    await message.answer(
         "📖 <b>Справка</b>\n\n"
-        "• Отправьте прямую ссылку на видео (например, <code>https://www.youtube.com/watch?v=...</code>)\n"
-        "• Бот автоматически определит источник и начнет обработку.\n"
-        "• Выберите желаемое качество из предложенных вариантов.\n"
-        "• Дождитесь завершения загрузки — файл будет отправлен в этот чат.\n\n"
-        "⏱ <i>Скачивание может занять от нескольких секунд до пары минут в зависимости от размера видео и нагрузки на сервер.</i>"
+        "• Отправьте прямую ссылку на видео\n"
+        "• Бот автоматически определит источник и начнет обработку\n"
+        "• Выберите качество (если доступно)\n"
+        "• Получите готовое видео\n\n"
+        "<i>Скачивание может занять от нескольких секунд до пары минут.</i>"
     )
-    await message.answer(help_text)
 
-# ========== ОСНОВНОЙ ОБРАБОТЧИК ССЫЛОК ==========
+# ==================== ОБРАБОТКА ССЫЛОК ====================
 @dp.message(F.text)
 async def handle_link(message: types.Message):
-    """Обрабатывает текстовые сообщения, проверяя, является ли оно ссылкой"""
-    url = message.text.strip()
+    # Ищем ссылку в тексте сообщения
+    msg_text = message.text
+    urls_found = []
     
-    # Простая проверка на наличие поддерживаемого домена
-    if not any(domain in url for domain in config.SUPPORTED_DOMAINS):
-        await message.answer("❌ Это не похоже на ссылку с поддерживаемой платформы (YouTube, TikTok и т.д.).")
+    # Используем регулярное выражение для поиска ссылок
+    url_pattern = re.compile(r'https?://\S+')
+    urls_found = url_pattern.findall(msg_text)
+    
+    if not urls_found:
+        await message.answer("❌ Не могу найти ссылку в вашем сообщении. Отправьте прямую ссылку.")
         return
-
-    # Сообщаем пользователю, что начали работу
+    
+    url = urls_found[0].strip().rstrip('.,;!?')
+    
+    # Проверяем, что это ссылка на поддерживаемую платформу
+    if not any(domain in url for domain in SUPPORTED_DOMAINS):
+        await message.answer("⚠️ Это не ссылка на поддерживаемую платформу (YouTube, TikTok).")
+        return
+    
+    # Отправляем сообщение о начале обработки
     status_msg = await message.answer("🔍 <i>Анализирую ссылку...</i>")
-
+    
     try:
         # Получаем информацию о видео
         video_info = await downloader.get_video_info(url)
         if not video_info:
-            await status_msg.edit_text("⚠️ Не удалось получить информацию о видео. Проверьте ссылку.")
+            await status_msg.edit_text("❌ Не удалось получить информацию о видео. Проверьте ссылку.")
             return
-
-        # Показываем информацию и предлагаем выбрать качество
-        info_text = (
-            f"🎥 <b>Найдено видео:</b>\n"
-            f"• <b>Название:</b> {video_info['title']}\n"
-            f"• <b>Автор:</b> {video_info['uploader']}\n"
-            f"• <b>Длительность:</b> {video_info['duration']} сек.\n\n"
-            f"<i>Выберите качество для скачивания:</i>"
+        
+        # Обновляем статус
+        await status_msg.edit_text(
+            f"🎬 <b>{video_info['title'][:50]}...</b>\n"
+            f"👤 Автор: {video_info['uploader']}\n"
+            f"⏱ Длительность: {video_info['duration']} сек.\n\n"
+            f"<i>Начинаю загрузку...</i>"
         )
-        await status_msg.edit_text(info_text, reply_markup=quality_keyboard())
-
-    except Exception as e:
-        logger.error(f"Ошибка обработки ссылки {url}: {e}")
-        await status_msg.edit_text("⚠️ При обработке запроса произошла ошибка. Попробуйте позже.")
-
-# ========== ОБРАБОТЧИКИ НАЖАТИЙ НА КНОПКИ (CALLBACK) ==========
-@dp.callback_query(F.data == "download")
-async def process_download_callback(callback: types.CallbackQuery):
-    """Обработчик нажатия кнопки 'Скачать видео'"""
-    await callback.message.edit_text("📥 Отправьте мне ссылку на видео...")
-    await callback.answer()
-
-@dp.callback_query(F.data.startswith("quality_"))
-async def process_quality_callback(callback: types.CallbackQuery):
-    """Обработчик выбора качества и запуск скачивания"""
-    # Здесь можно передать выбранное качество в downloader (опущено для простоты)
-    await callback.message.edit_text("⏳ <i>Начинаю скачивание... Это может занять некоторое время.</i>")
-    
-    # Извлекаем URL из текста предыдущего сообщения (упрощенный способ)
-    # В реальном боте URL нужно передавать между состояниями
-    original_text = callback.message.text
-    # Поиск URL в тексте (простая реализация)
-    import re
-    url_match = re.search(r'https?://[^\s]+', original_text)
-    
-    if url_match:
-        url = url_match.group(0)
+        
         # Скачиваем видео
-        file_path = await downloader.download_video(url, callback.from_user.id)
+        file_path = await downloader.download_video(url, message.chat.id)
         
         if file_path and os.path.exists(file_path):
-            # Отправляем видео пользователю
+            # Отправляем видео
             with open(file_path, 'rb') as video_file:
-                await bot.send_video(callback.from_user.id, video_file, caption="✅ Ваше видео готово!")
+                await message.answer("✅ <b>Видео готово!</b>")
+                await bot.send_video(
+                    message.chat.id,
+                    video_file,
+                    caption=f"🎥 {video_info['title'][:50]}... (via @videograbber_pro_bot)"
+                )
             # Удаляем временный файл
             os.remove(file_path)
+            await status_msg.delete()
         else:
-            await callback.message.answer("❌ Не удалось скачать видео.")
-    else:
-        await callback.message.answer("⚠️ Не могу найти ссылку для скачивания. Отправьте её снова.")
-    
-    await callback.answer()
+            await status_msg.edit_text("❌ Не удалось скачать видео. Попробуйте другую ссылку.")
+            
+    except Exception as e:
+        logger.error(f"Ошибка при скачивании {url}: {e}")
+        await status_msg.edit_text(f"⚠️ Произошла ошибка при обработке: {str(e)[:200]}...")
 
-# ========== ЗАПУСК БОТА ==========
+# ==================== ЗАПУСК БОТА ====================
 async def main():
-    """Главная функция для запуска бота"""
     logger.info("Бот запускается...")
     await dp.start_polling(bot)
 
