@@ -116,9 +116,34 @@ async def main():
     logger.info(f"🎉 Бот-посредник @{me.username} запущен и слушает сообщения!")
     # Бот работает до принудительной остановки
     await bot_client.run_until_disconnected()
+    
+import sys
 
 if __name__ == '__main__':
+    # Улучшенный и устойчивый способ запуска для хостингов
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
     try:
-        asyncio.run(main())
+        # Создаем и запускаем основную задачу
+        main_task = loop.create_task(main())
+        loop.run_until_complete(main_task)
     except KeyboardInterrupt:
-        logger.info("Бот остановлен.")
+        logger.info("Получен сигнал прерывания (Ctrl+C). Корректное завершение...")
+    except Exception as e:
+        logger.error(f"Необработанное исключение при запуске: {e}", exc_info=True)
+        sys.exit(1)
+    finally:
+        # Всегда стараемся корректно закрыть цикл событий
+        logger.info("Завершение работы бота...")
+        try:
+            # Отменяем все задачи
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+            # Даем задачам время на завершение
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            loop.run_until_complete(loop.shutdown_asyncgens())
+        finally:
+            loop.close()
+            logger.info("Цикл событий закрыт. Выход.")
