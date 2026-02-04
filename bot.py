@@ -1,149 +1,85 @@
-import asyncio
-import logging
+import os, asyncio, signal
 from telethon import TelegramClient, events
 
-# ==================== НАСТРОЙКИ ====================
-# ВАШИ ДАННЫЕ (замените на свои)
+# ============ ВСТАВЬ СВОИ ДАННЫЕ ЗДЕСЬ ============
 API_ID = 36849897
 API_HASH = '3b1f361c18993639ae7eab250eb51ab8'
-BOT_TOKEN = '8550747360:AAF0nhq9CMRhVgplUSeP7JWCbCNqo3NkNXs'  # Токен ВАШЕГО бота @videograbber_pro_bot
+BOT_TOKEN = '8550747360:AAF0nhq9CMRhVgplUSeP7JWCbCNqo3NkNXs'
+DOWNLOADER_BOT = '@GozillaDownloader'
+# =================================================
 
-# БОТ-ЗАГРУЗЧИК (можно менять, см. список ниже)
-DOWNLOADER_BOT = '@GozillaDownloader'  # Основной бот для скачивания
+# Глобальные переменные для клиентов
+user_client = None
+bot_client = None
 
-# Имя для файлов сессии (можно любое, например, ваш логин на хостинге)
-SESSION_NAME = 'ivan2'
-# ==================================================
+async def shutdown():
+    """Корректно завершает работу бота, отключая клиентов."""
+    print("🛑 Получен сигнал на завершение работы...")
+    if user_client and user_client.is_connected():
+        await user_client.disconnect()
+        print("✅ User client отключен.")
+    if bot_client and bot_client.is_connected():
+        await bot_client.disconnect()
+        print("✅ Bot client отключен.")
+    # Даем время на завершение всех задач
+    tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+    [t.cancel() for t in tasks]
+    await asyncio.gather(*tasks, return_exceptions=True)
+    print("✅ Все задачи завершены.")
 
-# Настройка логирования
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Инициализация клиентов Telethon
-# user_client - ваш личный аккаунт для общения с загрузчиком
-user_client = TelegramClient(f'{SESSION_NAME}_user.session', API_ID, API_HASH)
-# bot_client - ваш бот для приема команд от людей
-bot_client = TelegramClient(f'{SESSION_NAME}_bot.session', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
-
-logger.info("🤖 Бот-посредник запускается...")
-
-# ==================== ОБРАБОТКА КОМАНД ====================
 @bot_client.on(events.NewMessage(pattern='/start'))
 async def start_handler(event):
-    """Отвечает на команду /start"""
-    await event.reply(
-        "🚀 Привет! Я бот для скачивания видео.\n"
-        f"Просто отправь мне ссылку на видео с YouTube или TikTok, и я передам её загрузчику {DOWNLOADER_BOT}."
-    )
+    await event.reply('Привет! Я Videograbber Pro Bot. Присылай мне ссылку на видео с YouTube или TikTok.')
 
-@bot_client.on(events.NewMessage(pattern='/help'))
-async def help_handler(event):
-    """Отвечает на команду /help"""
-    await event.reply(
-        "📖 **Как пользоваться:**\n"
-        "1. Скопируй ссылку на видео (YouTube, TikTok и др.)\n"
-        "2. Отправь ссылку мне\n"
-        "3. Я автоматически передам её мощному загрузчику\n"
-        "4. Как только он пришлёт видео, я сразу перешлю его тебе!\n\n"
-        "⏳ Обычно это занимает от 15 до 60 секунд."
-    )
-
-# ==================== ОСНОВНАЯ ЛОГИКА: ОБРАБОТКА ССЫЛОК ====================
 @bot_client.on(events.NewMessage())
 async def link_handler(event):
-    """Принимает ссылку от пользователя, работает с загрузчиком."""
-    user_msg = event.message.message
+    msg_text = event.message.message
     user = await event.get_sender()
-
-    # Простая проверка, что это похоже на ссылку YouTube/TikTok
-    if not ('youtu' in user_msg or 'tiktok' in user_msg):
-        return  # Игнорируем, если это не ссылка
-
-    logger.info(f"📥 Получена ссылка от @{user.username}: {user_msg}")
-    status_msg = await event.reply(f'🔄 Передаю ссылку загрузчику {DOWNLOADER_BOT}...')
-
+    if not ('youtu' in msg_text or 'tiktok' in msg_text):
+        return
+    await event.reply('🔄 Принял! Передаю запрос загрузчику @GozillaDownloader. Ожидайте...')
     try:
-        # ШАГ 1: Ваш личный аккаунт отправляет ссылку боту-загрузчику
         async with user_client:
-            # Отправляем ссылку
-            sent_message = await user_client.send_message(DOWNLOADER_BOT, user_msg)
-            logger.info(f"📤 Ссылка отправлена загрузчику. ID нашего сообщения: {sent_message.id}")
-            
-            # Даем время боту-загрузчику обработать ссылку (можно увеличить для больших видео)
-            await asyncio.sleep(35)
-            logger.info("⏳ Поиск ответа от загрузчика...")
-
-            # ШАГ 2: Ищем в чате с загрузчиком ответ (последние 10 сообщений)
-            messages = await user_client.get_messages(DOWNLOADER_BOT, limit=10)
-            logger.info(f"📨 Проверяем последние {len(messages)} сообщений от загрузчика.")
-
+            await user_client.send_message(DOWNLOADER_BOT, msg_text)
+            await asyncio.sleep(25)
+            messages = await user_client.get_messages(DOWNLOADER_BOT, limit=5)
             for msg in messages:
-                # Ищем видео или документ, который пришел ПОСЛЕ нашего запроса
-                if msg.id > sent_message.id and (msg.video or (msg.document and 'video' in str(msg.document.mime_type))):
-                    logger.info(f"✅ Найдено видео для пересылки: {msg.file.name if msg.file else 'видео-файл'}")
-
-                    # ШАГ 3: Нашли видео! Пересылаем его пользователю.
-                    await status_msg.edit_text('✅ Видео готово! Отправляю...')
+                if msg.video or (msg.document and 'video' in str(msg.document.mime_type)):
+                    await bot_client.send_message(user.id, '✅ Видео готово! Скачиваю...')
                     await user_client.forward_messages(user.id, msg)
-                    logger.info(f"📭 Видео переслано пользователю {user.id}.")
-                    return  # Успешное завершение
-
-            # Если дошли сюда, значит, подходящий файл не нашелся
-            logger.warning("❌ Загрузчик не вернул видеофайл в отведенное время.")
-            await status_msg.edit_text(
-                '❌ Не удалось получить видео от загрузчика.\n'
-                'Возможные причины:\n'
-                '• Загрузчик перегружен\n'
-                '• Ссылка нерабочая или приватная\n'
-                '• Загрузчик изменил логику работы\n'
-                'Попробуйте другую ссылку или повторите позже.'
-            )
-
+                    return
+        await event.reply('❌ Не удалось получить видео от загрузчика. Попробуйте другую ссылку.')
     except Exception as e:
-        # Ловим любые ошибки в процессе
-        logger.error(f"💥 Критическая ошибка в работе с загрузчиком: {e}", exc_info=True)
-        await status_msg.edit_text(f'⚠️ Произошла техническая ошибка: {str(e)[:150]}')
+        await event.reply(f'⚠️ Ошибка: {str(e)}')
 
-# ==================== ЗАПУСК БОТА ====================
 async def main():
-    """Главная функция для запуска всех клиентов."""
-    # Авторизуем ваш личный аккаунт (при первом запуске запросит номер и код)
-    await user_client.start()
-    logger.info("✅ Личный аккаунт авторизован.")
-    # Запускаем вашего бота
-    await bot_client.start()
-    me = await bot_client.get_me()
-    logger.info(f"🎉 Бот-посредник @{me.username} запущен и слушает сообщения!")
-    # Бот работает до принудительной остановки
-    await bot_client.run_until_disconnected()
+    global user_client, bot_client
+    print("🤖 Запуск бота...")
     
-import sys
+    # Создаем клиентов с путями к сессиям в рабочей директории
+    user_client = TelegramClient('user_session', API_ID, API_HASH)
+    bot_client = TelegramClient('bot_session', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
+
+    # Регистрируем обработчик сигналов для graceful shutdown
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, lambda: asyncio.create_task(shutdown()))
+
+    print("🔐 Начало авторизации...")
+    await user_client.start()
+    print("✅ Аккаунт авторизован!")
+    await bot_client.start()
+    print(f"🎉 Бот запущен и работает!")
+    
+    # Запускаем бота на постоянную работу
+    await bot_client.run_until_disconnected()
 
 if __name__ == '__main__':
-    # Улучшенный и устойчивый способ запуска для хостингов
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    
     try:
-        # Создаем и запускаем основную задачу
-        main_task = loop.create_task(main())
-        loop.run_until_complete(main_task)
+        asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("Получен сигнал прерывания (Ctrl+C). Корректное завершение...")
+        print("Ручная остановка.")
     except Exception as e:
-        logger.error(f"Необработанное исключение при запуске: {e}", exc_info=True)
-        sys.exit(1)
+        print(f"Критическая ошибка: {e}")
     finally:
-        # Всегда стараемся корректно закрыть цикл событий
-        logger.info("Завершение работы бота...")
-        try:
-            # Отменяем все задачи
-            pending = asyncio.all_tasks(loop)
-            for task in pending:
-                task.cancel()
-            # Даем задачам время на завершение
-            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-            loop.run_until_complete(loop.shutdown_asyncgens())
-        finally:
-            loop.close()
-            logger.info("Цикл событий закрыт. Выход.")
+        print("Бот завершил работу.")
